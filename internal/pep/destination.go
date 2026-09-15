@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+type DestinationDialer interface {
+	DialContext(ctx context.Context, destination string) (net.Conn, error)
+	ResolveUDPAddr(ctx context.Context, destination string) ([]*net.UDPAddr, error)
+}
+
 type DestinationPolicy struct {
 	AllowPrivate bool
 	DialTimeout  time.Duration

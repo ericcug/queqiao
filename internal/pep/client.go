@@ -424,8 +424,8 @@ const bulkPoolIdleTimeout = 30 * time.Second
 const defaultFallbackGrace = 2 * time.Second
 
 func NewClient(cfg ClientConfig) (*Client, error) {
-	if cfg.ListenAddr == "" || cfg.RemoteAddr == "" {
-		return nil, errors.New("client listen and remote addresses are required")
+	if cfg.RemoteAddr == "" {
+		return nil, errors.New("client remote address is required")
 	}
 	if err := validateLocalAddressSpec(cfg.LocalAddress); err != nil {
 		return nil, err
@@ -686,13 +686,8 @@ func (c *Client) releasePendingOpen() {
 	}
 }
 
-// ServeListener is primarily useful for tests and service managers which
-// provide an already-bound socket. The listener is closed when the context is
-// cancelled or the method returns.
-func (c *Client) ServeListener(ctx context.Context, listener net.Listener) error {
-	defer listener.Close()
-	defer c.closeQUICPool()
-
+// Start initializes the path model engine and watches the uplink without starting a local SOCKS5 listener.
+func (c *Client) Start(ctx context.Context) {
 	// Readiness includes the first bounded path measurement. Starting it in a
 	// background watcher made the first accepted flow race the prewarm and
 	// usually become the traffic which discovered the path after all. Capture
@@ -713,6 +708,16 @@ func (c *Client) ServeListener(ctx context.Context, listener net.Listener) error
 	}
 	// A later change of uplink is a change of path, and nothing else will say so.
 	go c.watchUplink(ctx, uplink)
+}
+
+// ServeListener is primarily useful for tests and service managers which
+// provide an already-bound socket. The listener is closed when the context is
+// cancelled or the method returns.
+func (c *Client) ServeListener(ctx context.Context, listener net.Listener) error {
+	defer listener.Close()
+	defer c.closeQUICPool()
+
+	c.Start(ctx)
 
 	var wg sync.WaitGroup
 	go func() {
@@ -783,6 +788,67 @@ func (c *Client) closeBulkQUICPool(reason string) {
 	}
 }
 
+// DialConn opens a queqiao flow to the destination, returning a net.Conn for the application.
+// This skips the local SOCKS5 listener and acts as a direct transport API.
+func (c *Client) DialConn(ctx context.Context, destination string) (net.Conn, error) {
+	if !c.admitPendingOpen() {
+		return nil, errors.New("local pending-open limit reached")
+	}
+	flowOpenStarted := time.Now()
+	flow, err := c.openFlowWithRetries(ctx, destination)
+	c.releasePendingOpen()
+	if err != nil {
+		return nil, fmt.Errorf("remote flow open failed: %w", err)
+	}
+	c.cfg.Logger.Debug("local flow opened via DialConn", "transport", flow.kind, "duration", time.Since(flowOpenStarted))
+
+	appConn, flowConn := net.Pipe()
+
+	flowSession := newMultipathFlowWithMemory(ctx, flowConn, flow.sessionID, flow.flowID, c.cfg.ChunkSize, protocol.FlagAckUp, protocol.FlagAckDown, c.budget, c.metrics, c.cfg.Logger, c.memoryLimits, c.sendMemory, c.receiveMemory, c.classifierConfig())
+	flowSession.stallWatchdogDisabled = c.disableStallWatchdogForTest
+	c.declareClass(ctx, flowConn, flowSession)
+	flowSession.ackRanges.Store(true)
+	flowSession.idleTimeout = c.cfg.FlowIdleTimeout
+	flowSession.maxLifetime = c.cfg.FlowMaxLifetime
+	flowSession.openAckPending = flow.openPending
+	if flow.openPending {
+		flowSession.requireOpenConfirmation()
+	}
+	flowSession.tcpStriping.Store(flow.kind == TransportTCP && c.cfg.TCPFallbackLanes > 1)
+	flowSession.reserveControlLane = flow.reserveControl
+	flowSession.controlLaneShared = func() bool { return c.quicPoolActive.Load() > 1 }
+	if err := flowSession.addLane(&mpLane{
+		id: flow.laneID, kind: flow.kind, fc: flow.fc,
+		control: flow.reserveControl && flow.kind == TransportQUIC,
+	}); err != nil {
+		_ = flowConn.Close()
+		_ = flow.fc.Close()
+		flowSession.closeAll()
+		return nil, err
+	}
+
+	if err := socks5.WriteReply(flowConn, socks5.ReplySuccess, socks5.Addr{IP: net.IPv4zero, Port: 0}); err != nil {
+		_ = flowConn.Close()
+		flowSession.closeAll()
+		return nil, fmt.Errorf("simulate SOCKS5 success: %w", err)
+	}
+
+	go func() {
+		c.manageLanes(ctx, flowSession, flow.sessionID, flow.flowID, flow.kind)
+		c.metrics.FlowStarted()
+		stats, err := flowSession.run(ctx)
+		flowComplete := err == nil || (ctx.Err() == nil && flowSession.finSent.Load() && flowSession.remoteFinSeen.Load())
+		c.metrics.FlowFinished(stats.BytesSent, stats.BytesRead, !flowComplete && err != nil && !errors.Is(err, context.Canceled))
+		if !flowComplete && err != nil && !errors.Is(err, context.Canceled) {
+			c.cfg.Logger.Info("flow ended with error", "destination", destination, "error", err, "sent", stats.BytesSent, "read", stats.BytesRead, "duration", stats.Duration.Truncate(time.Millisecond))
+		} else {
+			c.cfg.Logger.Info("flow completed normally", "destination", destination, "sent", stats.BytesSent, "read", stats.BytesRead, "duration", stats.Duration.Truncate(time.Millisecond))
+		}
+	}()
+
+	return appConn, nil
+}
+
 func (c *Client) handleLocal(ctx context.Context, inner net.Conn) {
 	defer inner.Close()
 	// This deadline bounds the local exchange only: reading a SOCKS request
@@ -805,7 +871,7 @@ func (c *Client) handleLocal(ctx context.Context, inner net.Conn) {
 	// the network's business and is bounded by the flow open's own machinery.
 	_ = inner.SetDeadline(time.Time{})
 	if req.Command == socks5.CommandUDPAssociate {
-		c.handleUDPAssociate(ctx, inner)
+		c.HandleUDPAssociate(ctx, inner)
 		return
 	}
 	if !c.admitPendingOpen() {

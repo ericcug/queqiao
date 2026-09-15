@@ -41,7 +41,7 @@ type ServerConfig struct {
 	FlowIdleTimeout   time.Duration
 	FlowMaxLifetime   time.Duration
 	MaxSessions       int
-	DestinationPolicy DestinationPolicy
+	DestinationPolicy DestinationDialer
 	EnableTCP         bool
 	EnableQUIC        bool
 	// TCPFallbackLanes is the admission ceiling for one negotiated TCP-only

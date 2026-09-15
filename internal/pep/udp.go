@@ -105,7 +105,7 @@ func (w *packetWindow) admit(seq uint64) bool {
 	}
 }
 
-func (c *Client) handleUDPAssociate(ctx context.Context, control net.Conn) {
+func (c *Client) HandleUDPAssociate(ctx context.Context, control net.Conn) {
 	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
 		_ = socks5.WriteReply(control, socks5.ReplyGeneralFailure, nil)
