@@ -112,9 +112,10 @@ func (c *Client) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	}
 
 	// Dial the local UDP port assigned by HandleUDPAssociate
+	udpAddr := reply.BndAddr.(*net.UDPAddr)
 	udpConn, err := net.DialUDP("udp", nil, &net.UDPAddr{
-		IP:   reply.Addr.IP,
-		Port: reply.Addr.Port,
+		IP:   udpAddr.IP,
+		Port: udpAddr.Port,
 	})
 	if err != nil {
 		clientControl.Close()

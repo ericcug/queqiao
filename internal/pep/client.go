@@ -827,11 +827,6 @@ func (c *Client) DialConn(ctx context.Context, destination string) (net.Conn, er
 		return nil, err
 	}
 
-	if err := socks5.WriteReply(flowConn, socks5.ReplySuccess, socks5.Addr{IP: net.IPv4zero, Port: 0}); err != nil {
-		_ = flowConn.Close()
-		flowSession.closeAll()
-		return nil, fmt.Errorf("simulate SOCKS5 success: %w", err)
-	}
 
 	go func() {
 		c.manageLanes(ctx, flowSession, flow.sessionID, flow.flowID, flow.kind)
@@ -840,9 +835,9 @@ func (c *Client) DialConn(ctx context.Context, destination string) (net.Conn, er
 		flowComplete := err == nil || (ctx.Err() == nil && flowSession.finSent.Load() && flowSession.remoteFinSeen.Load())
 		c.metrics.FlowFinished(stats.BytesSent, stats.BytesRead, !flowComplete && err != nil && !errors.Is(err, context.Canceled))
 		if !flowComplete && err != nil && !errors.Is(err, context.Canceled) {
-			c.cfg.Logger.Info("flow ended with error", "destination", destination, "error", err, "sent", stats.BytesSent, "read", stats.BytesRead, "duration", stats.Duration.Truncate(time.Millisecond))
+			c.cfg.Logger.Info("flow ended with error", "destination", destination, "error", err, "sent", stats.BytesSent, "read", stats.BytesRead, "duration", stats.Ended.Sub(stats.Started).Truncate(time.Millisecond))
 		} else {
-			c.cfg.Logger.Info("flow completed normally", "destination", destination, "sent", stats.BytesSent, "read", stats.BytesRead, "duration", stats.Duration.Truncate(time.Millisecond))
+			c.cfg.Logger.Info("flow completed normally", "destination", destination, "sent", stats.BytesSent, "read", stats.BytesRead, "duration", stats.Ended.Sub(stats.Started).Truncate(time.Millisecond))
 		}
 	}()
 

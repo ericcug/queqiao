@@ -356,6 +356,46 @@ func encodeHost(host string) ([]byte, error) {
 	return append([]byte{3, byte(len(host))}, []byte(host)...), nil
 }
 
+// ReadReply reads a SOCKS5 reply from r.
+type Reply struct {
+	Reply byte
+	BndAddr net.Addr
+}
+
+func ReadReply(r io.Reader) (*Reply, error) {
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return nil, err
+	}
+	if header[0] != 5 {
+		return nil, fmt.Errorf("unsupported SOCKS version: %d", header[0])
+	}
+	
+	host, err := readHost(r, header[3])
+	if err != nil {
+		return nil, err
+	}
+	
+	portBuf := make([]byte, 2)
+	if _, err := io.ReadFull(r, portBuf); err != nil {
+		return nil, err
+	}
+	port := int(portBuf[0])<<8 | int(portBuf[1])
+	
+	// Create UDPAddr or TCPAddr based on the IP format
+	ip := net.ParseIP(host)
+	
+	var addr net.Addr
+	if ip != nil {
+		addr = &net.UDPAddr{IP: ip, Port: port}
+	}
+	
+	return &Reply{
+		Reply: header[1],
+		BndAddr: addr,
+	}, nil
+}
+
 func WriteReply(w io.Writer, code byte, bound net.Addr) error {
 	ip := net.IPv4zero
 	port := 0
