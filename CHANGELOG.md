@@ -10,6 +10,103 @@ also where every change merged since the newest release below is described. An
 entry written here conflicts with every other branch that wrote one; add a file
 to `changelog.d/` instead, as [`CONTRIBUTING.md`](CONTRIBUTING.md) describes.
 
+## v0.10.0 - 2026-10-19
+
+### Fixed
+
+- Keep reverse-direction ACKs readable when application delivery fills the
+  receive event queue, using a bounded overflow queue. Frame-write deadlines
+  now include writer-lock waits and cancellation interrupts blocked writes.
+  Repeated selective ACKs no longer reset the stall detector, and ranges beyond
+  sent data are rejected. Outstanding work shares one 45-second no-progress
+  budget across recovery attempts; blocked application writes have the same
+  budget, renewed on partial progress. Idle connections are unaffected.
+
+  Remove the extra exponential stall-rescue backoff and allow immediate AUTO
+  TCP handoff after a QUIC rescue race encounters lane-capacity refusals.
+  Suspected stalled lanes can be replaced without waiting for the young-lane
+  protection interval. Memory bounds and healthy racing-lane protection remain.
+
+  Stop and join the previous UDP relay reader before publishing its socket for
+  resumption, preventing it from consuming replies meant for the replacement.
+
+  Do not race a rescue JOIN against an unconfirmed optimistic OPEN. Remote
+  RESET and full-close cancellation bypass paused application delivery.
+- Keep ACK recovery progressing on reused, bidirectional connections. Replayed
+  DATA re-emits the cumulative ACK, new lanes receive the current ACK state,
+  and ACK writes prefer lanes that are not suspected stalled. Ordinary ACKs no
+  longer wait behind blocked application delivery. Already-delivered replay
+  ending exactly at the receive cursor no longer consumes the reassembly
+  window; segments crossing that cursor are rejected as overlaps.
+
+## v0.9.0 - 2026-10-17
+
+### Fixed
+
+- Acknowledged application messages no longer trigger lane rescue merely because
+  no response arrives within three round trips. The watchdog now requires
+  outstanding transport delivery, avoiding repeated recovery for slow origins,
+  one-way messages and quiet browser connections. Recovery races only QUIC
+  JOINs; an irreversible TCP handoff starts after the QUIC phase fails, so a
+  losing TCP attempt cannot retire the client's winning QUIC lane. Cancelling a
+  recovery attempt also interrupts its JOIN handshake instead of leaving it
+  blocked until the handshake timeout.
+  Delayed replay of already-delivered bytes after FIN is acknowledged instead
+  of aborting a completed response; data extending past FIN remains an error.
+
+### Security
+
+- Update the desktop, server, and mobile build toolchains to Go 1.26.9 and
+  upgrade golang.org/x/net to v0.60.0 with its companion dependencies to address
+  upstream security vulnerabilities.
+
+## v0.8.0 - 2026-09-19
+
+### Added
+
+- The Android app ships the full-device tunnel, and it is the default connection
+  mode for a new install. Until now a released build could only export a local
+  SOCKS5 endpoint for another VPN client, which left a phone with no such client
+  unable to connect at all. Both modes ship and are chosen under Settings; an
+  install that had already picked one keeps it. Because the release build now
+  declares a `VpnService`, a Google Play listing needs an Organization account
+  and Play's VPN declaration; direct APK distribution is unaffected.
+- The Android full tunnel routes the way the iOS tunnel does: a routing mode,
+  bypasses for local networks, the bundled Chinese address set and up to 256
+  hand-entered routes, and a rule-list editor with the same lint and the same
+  China preset, which keeps Chinese sites direct by name as well as by address.
+  Hand-entered routes are read as numeric addresses only, so a typo is refused
+  instead of being looked up. The address set installs as routes on Android 13
+  and later; earlier releases keep those addresses direct through a
+  `GEOIP,CN,DIRECT` rule. Routing is edited while disconnected and applies at
+  the next connect. While connected, the
+  home screen shows how many flows the rules sent through Queqiao, direct, or
+  rejected.
+
+### Changed
+
+- "Test all connections" on Android probes up to four profiles at once, as iOS
+  already did, and shows each result as it arrives; one slow or unreachable
+  provider no longer delays the verdict on the rest. Connection tests can also
+  be run while the tunnel is connected.
+
+## v0.7.0 - 2026-09-19
+
+### Added
+
+- The Android and iOS apps can read a one-time invitation from a QR code with
+  the device camera, from the same import screen that takes a pasted one. Five
+  hundred characters of base64 were never going to be typed from another
+  screen. Android decodes the frame on the device in the Go core and iOS uses
+  the system's own detector; no image or invitation leaves the process, and a
+  scanned code that is not a valid Queqiao invitation is refused at the
+  viewfinder. The released Android build gains only the CAMERA permission,
+  which is optional.
+- `queqiaod provider invite --qr` draws the new invitation as a QR code in the
+  terminal, black on a white field whatever the terminal theme, for the mobile
+  apps to scan. It goes to standard error, so standard output is still exactly
+  the URI and piping it into a portal keeps working.
+
 ## v0.6.3 - 2026-09-07
 
 ### Fixed
