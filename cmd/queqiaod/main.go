@@ -68,8 +68,10 @@ func run(args []string) error {
 		return runLogs(args[1:])
 	case "service":
 		return runService(args[1:])
+	case "relay":
+		return runRelay(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q; want provider, enroll, client, service, server, doctor, segments, logs, or version", args[0])
+		return fmt.Errorf("unknown command %q; want provider, enroll, client, service, server, relay, doctor, segments, logs, or version", args[0])
 	}
 }
 
@@ -520,6 +522,8 @@ type runtimeOptions struct {
 	brutalBytesPerSec, adaptiveMinBytesSec, adaptiveMaxBytesSec uint64
 	aggregateBytesPerSec, interactiveReserveBytesPerSec         uint64
 	fallbackDelay, fallbackGrace, udpCooldown                   time.Duration
+	fallbackGraceMax                                            time.Duration
+	fallbackGraceRTTFactor                                      float64
 	udpFailureThreshold                                         int
 	hopPortCount                                                int
 	allowPrivate                                                bool
@@ -582,6 +586,8 @@ func bindRuntimeFlags(fs *flag.FlagSet, opts *runtimeOptions, client bool) {
 		fs.BoolVar(&opts.waitForOpenAck, "wait-for-open-ack", false, "wait for destination confirmation before answering SOCKS")
 		fs.DurationVar(&opts.fallbackDelay, "fallback-delay", 300*time.Millisecond, "delay before preparing TCP fallback")
 		fs.DurationVar(&opts.fallbackGrace, "fallback-grace", 2*time.Second, "time a ready TCP fallback waits for QUIC")
+		fs.DurationVar(&opts.fallbackGraceMax, "fallback-grace-max", 30*time.Second, "cap on the adaptive QUIC preference window (0 = uncapped)")
+		fs.Float64Var(&opts.fallbackGraceRTTFactor, "fallback-grace-rtt-factor", 16, "scale the QUIC preference window by this multiple of the observed RTT (0 = fixed fallback-grace)")
 		fs.IntVar(&opts.udpFailureThreshold, "udp-failure-threshold", 3, "UDP failures before cooldown")
 		fs.DurationVar(&opts.udpCooldown, "udp-cooldown", 30*time.Second, "UDP cooldown after repeated failure")
 	} else {
@@ -746,7 +752,7 @@ func runClient(args []string) (returnErr error) {
 			return err
 		}
 	}
-	client, err := newRuntimeClient(profile, opts.listen, opts, logger, nil, nil, nil)
+	client, err := newRuntimeClient(profile, opts.listen, opts, logger, nil, nil, nil, "", 0)
 	if err != nil {
 		return err
 	}
